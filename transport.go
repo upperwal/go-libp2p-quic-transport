@@ -336,3 +336,8 @@ func (t *transport) Protocols() []int {
 func (t *transport) String() string {
 	return "QUIC"
 }
+
+func GetConnForAddr(t tpt.Transport, network, host string) (net.PacketConn, error) {
+	tpt := t.(*transport)
+	return tpt.connManager.GetConnForAddr(network, host)
+}
