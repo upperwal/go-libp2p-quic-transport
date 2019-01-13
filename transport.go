@@ -293,6 +293,10 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 		return nil, err
 	}
 
+	if strings.Contains(raddr.String(), "10.0.0.") {
+		return nil, fmt.Errorf("Something")
+	}
+
 	// get the IP address of the interface which could dial to "raddr".
 	intf := t.connManager.getLocalInterfaceToDialOn(network, host)
 	// check if we have "packetConn" corresponding to this interface. If yes, dial using it. If not, create a new one.
