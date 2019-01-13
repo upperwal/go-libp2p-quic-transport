@@ -35,7 +35,7 @@ func newListener(addr ma.Multiaddr, t *transport, localPeer peer.ID, key ic.Priv
 	if err != nil {
 		return nil, err
 	}
-	ln, err := quic.Listen(pconn, tlsConf, quicConfig)
+	ln, err := quic.Listen(pconn.conn, tlsConf, quicConfig)
 	if err != nil {
 		return nil, err
 	}
