@@ -19,6 +19,8 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr-net"
 	"github.com/whyrusleeping/mafmt"
+
+	stun "github.com/upperwal/go-stun"
 )
 
 var log = logging.Logger("libp2pquic")
@@ -48,12 +50,17 @@ var quicConfig = &quic.Config{
 	KeepAlive: true,
 }
 
+type connWrapper struct {
+	conn     net.PacketConn
+	stunConn *stun.Client
+}
+
 type connManager struct {
 	// conn keeps track of all "PacketConn" created.
 	// maps string(Network_Type:Addr_Type) -> PacketConn
 	// Network_Type could be "udp4" or "udp6"
 	// Addr_Type could be one of the const from AddrType* depending on the type of IP address.
-	conn      map[string][]net.PacketConn
+	conn      map[string][]*connWrapper
 	connMutex *sync.Mutex
 
 	// interfaceAddrs maps string(Network_Type:Addr_Type) -> []string(IP Addresses)
@@ -62,6 +69,10 @@ type connManager struct {
 	// Eg: 192.168.0.102 as			["udp4:0"]->"192.168.0.102"
 	// Used when dialing and an appropriate socket isn't available/open.
 	interfaceAddrs map[string][]string
+
+	privKey    *ic.PrivKey
+	enableStun bool
+	stunServer []ma.Multiaddr
 }
 
 func resolveNetworkAndAddrType(addr *net.IPAddr) (string, error) {
@@ -97,7 +108,7 @@ func resolveNetworkAndAddrType(addr *net.IPAddr) (string, error) {
 }
 
 // return conn which accepts connection on all interface
-func (c *connManager) connForAllInterface(network string) net.PacketConn {
+func (c *connManager) connForAllInterface(network string) *connWrapper {
 	key := network + ":" + strconv.Itoa(int(AddrTypeUnspecified))
 	if len(c.conn[key]) != 0 {
 		return c.conn[key][0]
@@ -106,7 +117,7 @@ func (c *connManager) connForAllInterface(network string) net.PacketConn {
 	}
 }
 
-func (c *connManager) GetConnForAddr(network, host string) (net.PacketConn, error) {
+func (c *connManager) GetConnForAddr(network, host string) (*connWrapper, error) {
 	udpAddr, err := net.ResolveUDPAddr(network, host)
 	if err != nil {
 		return nil, err
@@ -133,16 +144,30 @@ func (c *connManager) GetConnForAddr(network, host string) (net.PacketConn, erro
 		if err != nil {
 			return nil, err
 		}
+		var stunClient *stun.Client
+		if c.enableStun {
+			stunClient, err = stun.NewClient(*c.privKey, pc)
+			if err != nil {
+				return nil, err
+			}
+			stunClient.ConnectSTUNServer(c.stunServer)
+
+		}
+
+		cw := &connWrapper{
+			conn:     pc,
+			stunConn: stunClient,
+		}
 		c.connMutex.Lock()
-		c.conn[netAddrType] = append(c.conn[netAddrType], pc)
+		c.conn[netAddrType] = append(c.conn[netAddrType], cw)
 		c.connMutex.Unlock()
 		log.Debug("Creating a new packetConn with local addr:", pc.LocalAddr())
-		return pc, nil
+		return cw, nil
 	}
 
 	// This network has at least one PacketConn.
 	// Return the first one.
-	log.Debug("Found an existing packetConn with local addr: ", availablePacketConnList[0].LocalAddr())
+	log.Debug("Found an existing packetConn with local addr: ", availablePacketConnList[0].conn.LocalAddr())
 	return availablePacketConnList[0], nil
 }
 
@@ -218,12 +243,18 @@ type transport struct {
 	localPeer   peer.ID
 	tlsConf     *tls.Config
 	connManager *connManager
+	options     TransportOpt
 }
 
 var _ tpt.Transport = &transport{}
 
+type TransportOpt struct {
+	EnableStun  bool
+	StunServers []ma.Multiaddr
+}
+
 // NewTransport creates a new QUIC transport
-func NewTransport(key ic.PrivKey) (tpt.Transport, error) {
+func NewTransport(key ic.PrivKey, opt TransportOpt) (tpt.Transport, error) {
 	localPeer, err := peer.IDFromPrivateKey(key)
 	if err != nil {
 		return nil, err
@@ -234,9 +265,12 @@ func NewTransport(key ic.PrivKey) (tpt.Transport, error) {
 	}
 
 	cm := &connManager{
-		conn:           make(map[string][]net.PacketConn),
+		conn:           make(map[string][]*connWrapper),
 		connMutex:      &sync.Mutex{},
 		interfaceAddrs: make(map[string][]string),
+		privKey:        &key,
+		stunServer:     opt.StunServers,
+		enableStun:     opt.EnableStun,
 	}
 
 	// query and fill "interfaceAddrs" map->list with all the available interface IPs.
@@ -248,6 +282,7 @@ func NewTransport(key ic.PrivKey) (tpt.Transport, error) {
 		localPeer:   localPeer,
 		tlsConf:     tlsConf,
 		connManager: cm,
+		options:     opt,
 	}, nil
 }
 
@@ -261,7 +296,7 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 	// get the IP address of the interface which could dial to "raddr".
 	intf := t.connManager.getLocalInterfaceToDialOn(network, host)
 	// check if we have "packetConn" corresponding to this interface. If yes, dial using it. If not, create a new one.
-	pconn, err := t.connManager.GetConnForAddr(network, intf+":")
+	wconn, err := t.connManager.GetConnForAddr(network, intf+":")
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +328,16 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 		}
 		return nil
 	}
-	sess, err := quic.DialContext(ctx, pconn, addr, host, tlsConf, quicConfig)
+
+	if t.options.EnableStun && len(t.options.StunServers) != 0 && manet.IsPublicAddr(raddr) {
+		wait, err := wconn.stunConn.PunchHole(raddr)
+		if err != nil {
+			return nil, err
+		}
+		<-wait
+	}
+
+	sess, err := quic.DialContext(ctx, wconn.conn, addr, host, tlsConf, quicConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -335,9 +379,4 @@ func (t *transport) Protocols() []int {
 
 func (t *transport) String() string {
 	return "QUIC"
-}
-
-func GetConnForAddr(t tpt.Transport, network, host string) (net.PacketConn, error) {
-	tpt := t.(*transport)
-	return tpt.connManager.GetConnForAddr(network, host)
 }
