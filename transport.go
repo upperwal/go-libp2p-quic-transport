@@ -293,7 +293,7 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 		return nil, err
 	}
 
-	if strings.Contains(raddr.String(), "10.0.0.") {
+	if strings.Contains(raddr.String(), "10.0.0.") || strings.Contains(raddr.String(), "192.168.") {
 		return nil, fmt.Errorf("Something")
 	}
 
