@@ -330,7 +330,12 @@ func (t *transport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) (tp
 	}
 
 	if t.options.EnableStun && len(t.options.StunServers) != 0 && manet.IsPublicAddr(raddr) {
-		wait, err := wconn.stunConn.PunchHole(raddr)
+		quicMA, err := ma.NewMultiaddr("/quic")
+		if err != nil {
+			return nil, err
+		}
+
+		wait, err := wconn.stunConn.PunchHole(raddr.Decapsulate(quicMA))
 		if err != nil {
 			return nil, err
 		}
