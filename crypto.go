@@ -71,7 +71,7 @@ func getRemotePubKey(chain []*x509.Certificate) (ic.PubKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ic.UnmarshalRsaPublicKey(remotePubKey)
+	return ic.UnmarshalPublicKey(remotePubKey)
 }
 
 func keyToCertificate(sk ic.PrivKey) (interface{}, *x509.Certificate, error) {
@@ -99,6 +99,13 @@ func keyToCertificate(sk ic.PrivKey) (interface{}, *x509.Certificate, error) {
 	switch pbmes.GetType() {
 	case pb.KeyType_RSA:
 		k, err := x509.ParsePKCS1PrivateKey(pbmes.GetData())
+		if err != nil {
+			return nil, nil, err
+		}
+		publicKey = &k.PublicKey
+		privateKey = k
+	case pb.KeyType_ECDSA:
+		k, err := x509.ParseECPrivateKey(pbmes.GetData())
 		if err != nil {
 			return nil, nil, err
 		}
