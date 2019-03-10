@@ -71,7 +71,15 @@ func getRemotePubKey(chain []*x509.Certificate) (ic.PubKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ic.UnmarshalPublicKey(remotePubKey)
+
+	switch chain[1].PublicKeyAlgorithm {
+	case x509.RSA:
+		return ic.UnmarshalRsaPublicKey(remotePubKey)
+	case x509.ECDSA:
+		ic.UnmarshalECDSAPublicKey(remotePubKey)
+	}
+
+	return nil, errors.New("unsupported key type for TLS")
 }
 
 func keyToCertificate(sk ic.PrivKey) (interface{}, *x509.Certificate, error) {
@@ -111,7 +119,6 @@ func keyToCertificate(sk ic.PrivKey) (interface{}, *x509.Certificate, error) {
 		}
 		publicKey = &k.PublicKey
 		privateKey = k
-	// TODO: add support for ECDSA
 	default:
 		return nil, nil, errors.New("unsupported key type for TLS")
 	}
