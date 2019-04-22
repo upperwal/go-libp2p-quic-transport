@@ -1,8 +1,7 @@
 language: go
 
 go:
-  - "1.10.x"
-  - "1.11.x"
+  - "1.12.x"
 
 # first part of the GOARCH workaround
 # setting the GOARCH directly doesn't work, since the value will be overwritten later
@@ -14,7 +13,10 @@ env:
 # second part of the GOARCH workaround
 # now actually set the GOARCH env variable to the value of the temporary variable set earlier
 before_install:
-  - make deps
+  - export GO111MODULE=on
+  - go get golang.org/x/tools/cmd/cover
+  - go get github.com/onsi/ginkgo/ginkgo
+  - go get github.com/onsi/gomega
   - export GOARCH=$TRAVIS_GOARCH
   - go env # for debugging
 
@@ -32,4 +34,3 @@ after_success:
 
 cache:
   directories:
-    - $GOPATH/src/gx

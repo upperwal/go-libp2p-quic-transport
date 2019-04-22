@@ -38,7 +38,6 @@ const (
 )
 
 var quicConfig = &quic.Config{
-	Versions:                              []quic.VersionNumber{quic.VersionMilestone0_10_0},
 	MaxIncomingStreams:                    1000,
 	MaxIncomingUniStreams:                 -1,              // disable unidirectional streams
 	MaxReceiveStreamFlowControlWindow:     3 * (1 << 20),   // 3 MB
